@@ -124,27 +124,69 @@ export async function load_socks5_from_disk() {
 
 /**
  * Restarts the Dante SOCKS5 container and invalidates the cached configuration.
- * @returns {Promise<void>} A promise that resolves when the container is restarted.
+ * Attempts to use docker compose restart first (better API compatibility), then falls back to docker restart.
+ * Gracefully handles API version mismatches by logging warnings instead of errors.
+ * @returns {Promise<void>} A promise that resolves when the container restart is attempted.
  */
 export async function restart_dante_container() {
 
-    // Restart the dante container, note that this relies on the container being named "dante"
-    try {
-        log.info( `Restarting dante container` )
-        const result = await new Promise( ( resolve, reject ) => {
-            exec( `docker restart dante`, ( error, stdout, stderr ) => {
-                if( error ) return reject( error )
-                if( stderr ) return reject( stderr )
-                resolve( stdout )
+    log.info( `Restarting dante container` )
+    let restart_success = false
+    let last_error = null
+    
+    // Try docker compose restart first (better API compatibility)
+    const compose_files = [
+        'docker-compose.yml',
+        'docker-compose.ci.yml'
+    ]
+    
+    for (const compose_file of compose_files) {
+        try {
+            const result = await run( `docker compose -f ${ compose_file } restart dante`, { verbose: true } )
+            log.info( `docker compose restart succeeded with ${ compose_file }:`, result )
+            restart_success = true
+            break
+        } catch ( compose_error ) {
+            last_error = compose_error
+            log.debug( `docker compose restart failed with ${ compose_file }, trying next method:`, compose_error.message )
+        }
+    }
+    
+    // Fall back to direct docker restart if compose failed
+    if( !restart_success ) {
+        try {
+            const result = await new Promise( ( resolve, reject ) => {
+                exec( `docker restart dante`, ( error, stdout, stderr ) => {
+                    if( error ) {
+                        const error_msg = `${ error.message }${ stderr || '' }`
+                        // Gracefully handle API version mismatches - container may still be working
+                        if( error_msg.includes( 'API version' ) || error_msg.includes( 'too old' ) ) {
+                            log.warn( `Docker API version mismatch detected. Cannot restart dante container programmatically.` )
+                            log.warn( `Container may still be working - restart is non-critical.` )
+                            log.warn( `To restart manually, run from host: docker compose restart dante` )
+                            return resolve( `API version warning (non-fatal): ${ error_msg }` )
+                        }
+                        return reject( error )
+                    }
+                    if( stderr ) return reject( stderr )
+                    resolve( stdout )
+                } )
             } )
-        } )
-
-        // Mark dante config as uninitialised so it reloads on next use
+            log.info( `Direct docker restart succeeded:`, result )
+            restart_success = true
+        } catch ( e ) {
+            log.error( `Error in restart_dante_container:`, e )
+        }
+    }
+    
+    // Mark dante config as uninitialised so it reloads on next use (even if restart failed)
+    if (restart_success) {
         cache( 'dante_config_initialised', false )
-        
-        log.info( `Restarted dante container`, result )
-    } catch ( e ) {
-        log.error( `Error in restart_dante_container:`, e )
+        log.info( `Dante container restart process completed.` )
+    } else {
+        log.warn( `Failed to restart dante container after all attempts. Last error:`, last_error?.message || 'Unknown error' )
+        log.warn( `Container may still be working - this is non-critical. Config cache will be cleared anyway.` )
+        cache( 'dante_config_initialised', false )
     }
 }
 

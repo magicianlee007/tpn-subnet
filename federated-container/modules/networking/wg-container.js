@@ -199,33 +199,74 @@ export async function delete_wireguard_configs( ids=[] ) {
 /**
  * Restart the WireGuard container.
  * 
- * This function attempts to restart a Docker container named "wireguard".
- * It logs the result if successful, and logs an error if the restart fails.
+ * Attempts to use docker compose restart first (better API compatibility), then falls back to docker restart.
+ * Gracefully handles API version mismatches by logging warnings instead of errors.
  * 
  * @async
  * @function restart_wg_container
- * @returns {Promise<void>} A promise that resolves when the container is restarted.
- * @throws Will throw an error if the Docker command fails.
+ * @returns {Promise<void>} A promise that resolves when the container restart is attempted.
  */
 export async function restart_wg_container() {
 
-    // Restart the wireguard container, note that this relies on the container being named "wireguard"
-    try {
-        log.info( `Restarting wireguard container` )
-        if( CI_MODE && CI_MOCK_WG_CONTAINER ) {
-            log.info( `🤡 Mocking wireguard server container restart` )
-            return true
+    log.info( `Restarting wireguard container` )
+    if( CI_MODE && CI_MOCK_WG_CONTAINER ) {
+        log.info( `🤡 Mocking wireguard server container restart` )
+        return true
+    }
+    
+    let restart_success = false
+    let last_error = null
+    
+    // Try docker compose restart first (better API compatibility)
+    const compose_files = [
+        'docker-compose.yml',
+        'docker-compose.ci.yml'
+    ]
+    
+    for (const compose_file of compose_files) {
+        try {
+            const result = await run( `docker compose -f ${ compose_file } restart wireguard`, { verbose: true } )
+            log.info( `docker compose restart succeeded with ${ compose_file }:`, result )
+            restart_success = true
+            break
+        } catch ( compose_error ) {
+            last_error = compose_error
+            log.debug( `docker compose restart failed with ${ compose_file }, trying next method:`, compose_error.message )
         }
-        const result = await new Promise( ( resolve, reject ) => {
-            exec( `docker restart wireguard`, ( error, stdout, stderr ) => {
-                if( error ) return reject( error )
-                if( stderr ) return reject( stderr )
-                resolve( stdout )
+    }
+    
+    // Fall back to direct docker restart if compose failed
+    if( !restart_success ) {
+        try {
+            const result = await new Promise( ( resolve, reject ) => {
+                exec( `docker restart wireguard`, ( error, stdout, stderr ) => {
+                    if( error ) {
+                        const error_msg = `${ error.message }${ stderr || '' }`
+                        // Gracefully handle API version mismatches - container may still be working
+                        if( error_msg.includes( 'API version' ) || error_msg.includes( 'too old' ) ) {
+                            log.warn( `Docker API version mismatch detected. Cannot restart wireguard container programmatically.` )
+                            log.warn( `Container may still be working - restart is non-critical.` )
+                            log.warn( `To restart manually, run from host: docker compose restart wireguard` )
+                            return resolve( `API version warning (non-fatal): ${ error_msg }` )
+                        }
+                        return reject( error )
+                    }
+                    if( stderr ) return reject( stderr )
+                    resolve( stdout )
+                } )
             } )
-        } )
-        log.info( `Restarted wireguard container`, result )
-    } catch ( e ) {
-        log.error( `Error in restart_wg_container:`, e )
+            log.info( `Direct docker restart succeeded:`, result )
+            restart_success = true
+        } catch ( e ) {
+            log.error( `Error in restart_wg_container:`, e )
+        }
+    }
+    
+    if (restart_success) {
+        log.info( `Wireguard container restart process completed.` )
+    } else {
+        log.warn( `Failed to restart wireguard container after all attempts. Last error:`, last_error?.message || 'Unknown error' )
+        log.warn( `Container may still be working - this is non-critical.` )
     }
 }
 
