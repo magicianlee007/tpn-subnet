@@ -64,6 +64,18 @@ done
 existing_auth_files_count=$(ls -1 $PASSWORD_DIR/*.password 2>/dev/null | wc -l)
 if (( existing_auth_files_count > 0 )); then
     echo "Found ${existing_auth_files_count} unused auth files in ${PASSWORD_DIR}, skipping user generation."
+    # Still need to set up PAM service even if skipping user generation
+    PAM_FILE="/etc/pam.d/${DANTE_SERVICE_NAME}"
+    if [ ! -f "${PAM_FILE}" ]; then
+        echo "Setting up PAM service for Dante at ${PAM_FILE}..."
+        mkdir -p /etc/pam.d
+        echo "auth   required    pam_unix.so" > "${PAM_FILE}"
+        echo "account required    pam_unix.so" >> "${PAM_FILE}"
+        chmod 644 "${PAM_FILE}"
+        echo "PAM service ${DANTE_SERVICE_NAME} configured."
+    else
+        echo "PAM service ${PAM_FILE} already exists."
+    fi
     start_dante
     exit 0
 fi
