@@ -63,7 +63,36 @@ done
 # Check if there are any unused auth files based on /$PASSWORD_DIR/*.password if so, skip user generation
 existing_auth_files_count=$(ls -1 $PASSWORD_DIR/*.password 2>/dev/null | wc -l)
 if (( existing_auth_files_count > 0 )); then
-    echo "Found ${existing_auth_files_count} unused auth files in ${PASSWORD_DIR}, skipping user generation."
+    echo "Found ${existing_auth_files_count} unused auth files in ${PASSWORD_DIR}, checking if users exist..."
+    
+    # Recreate users from password files if they don't exist
+    users_recreated=0
+    for password_file in $PASSWORD_DIR/*.password; do
+        if [ -f "$password_file" ]; then
+            username=$(basename "$password_file" .password)
+            # Check if user exists
+            if ! id "$username" >/dev/null 2>&1; then
+                echo "User $username does not exist, recreating from password file..."
+                password=$(cat "$password_file" | tr -d '[:space:]')
+                if [ -n "$password" ]; then
+                    # Create user
+                    useradd -M -s /usr/sbin/nologin "$username" 2>/dev/null || true
+                    # Set password
+                    echo "${username}:${password}" | chpasswd
+                    users_recreated=$((users_recreated + 1))
+                else
+                    echo "Warning: Password file $password_file is empty, skipping user creation."
+                fi
+            fi
+        fi
+    done
+    
+    if [ $users_recreated -gt 0 ]; then
+        echo "Recreated $users_recreated users from existing password files."
+    else
+        echo "All users from password files already exist in the system."
+    fi
+    
     # Still need to set up PAM service even if skipping user generation
     PAM_FILE="/etc/pam.d/${DANTE_SERVICE_NAME}"
     if [ ! -f "${PAM_FILE}" ]; then
