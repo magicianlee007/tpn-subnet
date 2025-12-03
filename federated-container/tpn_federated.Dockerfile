@@ -9,30 +9,43 @@ ENV MAX_PROCESS_RAM_MB=8192
 
 # Install all dependencies
 ENV DEBIAN_FRONTEND=noninteractive
+# Install Docker CLI from Docker's official repository (newer version with API 1.44+ support)
+# This is required for API 1.44+ compatibility with newer Docker daemons
 RUN apt update && apt install -y --no-install-recommends \
-    # curl for healthcheck
+    # zstd for faster apt package compression (faster than gzip)
+    zstd \
+    # Base dependencies for Docker repo setup
     curl \
-    # certificates
     ca-certificates \
-    # wireguard for vpn connections
+    gnupg \
+    lsb-release \
+    # WireGuard for VPN connections
     wireguard wireguard-tools \
-    # networking tools
+    # Networking tools
     iproute2 dnsutils iputils-ping iptables \
     # wg-quick dependencies
     procps \
-    # git
+    # Git
     git \
     # ncat
     netcat-openbsd \
-    # docker cli
-    docker.io \
-    # cleanup cache for image size reduction
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt update \
+    && apt install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && docker --version || (echo "ERROR: Failed to install docker-ce-cli. Build cannot continue." && exit 1) \
+    # Cleanup cache for image size reduction
     && apt clean && rm -rf /var/lib/apt/lists/*
 
-# wg-quick resolver dependency
-RUN apt update && apt install -y --no-install-recommends resolvconf || echo "resolvconf postinstall is expected to fail"; apt clean && rm -rf /var/lib/apt/lists/*
-RUN echo '#!/bin/sh\nexit 0' > /var/lib/dpkg/info/resolvconf.postinst && chmod +x /var/lib/dpkg/info/resolvconf.postinst
-RUN dpkg --configure resolvconf
+# Install resolvconf separately (postinstall will fail, we work around it)
+RUN apt update \
+    && (apt install -y --no-install-recommends resolvconf || true) \
+    && mkdir -p /var/lib/dpkg/info \
+    && echo '#!/bin/sh\nexit 0' > /var/lib/dpkg/info/resolvconf.postinst \
+    && chmod +x /var/lib/dpkg/info/resolvconf.postinst \
+    && (dpkg --configure resolvconf || true) \
+    && apt clean && rm -rf /var/lib/apt/lists/*
 
 # Configure git
 RUN git config --global --add safe.directory /app
