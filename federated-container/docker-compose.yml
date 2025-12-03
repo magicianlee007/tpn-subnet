@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: tpn_federated.Dockerfile
+    pull_policy: build  # Always build locally instead of pulling from registry
     container_name: tpn-federated
     restart: unless-stopped
     # .env note: environment variable interpolation is done with the .env in the folder where you run docker compose
