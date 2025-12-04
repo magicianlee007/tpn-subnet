@@ -8,6 +8,10 @@ services:
     pull_policy: build  # Always build locally instead of pulling from registry
     container_name: tpn-federated
     restart: unless-stopped
+    labels:
+      # Exclude from watchtower auto-updates to prevent it from pulling old images from registry
+      # This ensures locally built images with updated Docker CLI are used
+      - "com.centurylinklabs.watchtower.enable=false"
     # .env note: environment variable interpolation is done with the .env in the folder where you run docker compose
     # the env_file only passes into the container, meaning they do not get added in ${VAR} fields in docker-compose.yml
     env_file:
@@ -84,7 +88,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
+  
   # Reverse Proxy (SWAG)
   swag:
     image: lscr.io/linuxserver/swag:latest
